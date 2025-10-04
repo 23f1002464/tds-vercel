@@ -1,20 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import statistics
 
 app = FastAPI()
 
-# Enhanced CORS configuration
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
 )
 
 class AnalyticsRequest(BaseModel):
@@ -80,23 +79,35 @@ def calculate_percentile(data: List[float], percentile: float) -> float:
 async def analyze_latency(request: AnalyticsRequest):
     try:
         telemetry_data = load_telemetry_data()
+        
+        # Filter data for requested regions
         filtered_data = [item for item in telemetry_data if item["region"] in request.regions]
         
         if not filtered_data:
-            raise HTTPException(status_code=404, detail="No data found for specified regions")
+            # Return empty results for requested regions instead of error
+            results = {region: {"avg_latency": 0, "p95_latency": 0, "avg_uptime": 0, "breaches": 0} for region in request.regions}
+            return results
         
+        # Calculate metrics per region
         results = {}
         
         for region in request.regions:
             region_data = [item for item in filtered_data if item["region"] == region]
             
             if not region_data:
-                results[region] = {"avg_latency": 0, "p95_latency": 0, "avg_uptime": 0, "breaches": 0}
+                results[region] = {
+                    "avg_latency": 0,
+                    "p95_latency": 0,
+                    "avg_uptime": 0,
+                    "breaches": 0
+                }
                 continue
             
+            # Extract metrics
             latencies = [item["latency_ms"] for item in region_data]
             uptimes = [item["uptime_pct"] for item in region_data]
             
+            # Calculate statistics
             avg_latency = statistics.mean(latencies) if latencies else 0
             p95_latency = calculate_percentile(latencies, 95)
             avg_uptime = statistics.mean(uptimes) if uptimes else 0
@@ -109,13 +120,8 @@ async def analyze_latency(request: AnalyticsRequest):
                 "breaches": breaches
             }
         
-        # Create response with explicit CORS headers
-        response = JSONResponse(content=results)
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        
-        return response
+        # Return the results object directly (not wrapped in JSONResponse)
+        return results
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -123,11 +129,7 @@ async def analyze_latency(request: AnalyticsRequest):
 # Handle OPTIONS preflight requests
 @app.options("/api/latency")
 async def options_latency():
-    response = JSONResponse(content={"message": "OK"})
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    return response
+    return {"message": "OK"}
 
 @app.get("/")
 async def root():

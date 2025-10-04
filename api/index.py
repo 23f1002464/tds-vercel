@@ -1,24 +1,22 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from typing import List, Dict
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from typing import List
 import statistics
 
 app = FastAPI()
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 class AnalyticsRequest(BaseModel):
     regions: List[str]
     threshold_ms: int
+
+# Manual CORS middleware
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS, PUT, DELETE"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    return response
 
 # Load the telemetry data
 def load_telemetry_data():
@@ -83,11 +81,6 @@ async def analyze_latency(request: AnalyticsRequest):
         # Filter data for requested regions
         filtered_data = [item for item in telemetry_data if item["region"] in request.regions]
         
-        if not filtered_data:
-            # Return empty results for requested regions instead of error
-            results = {region: {"avg_latency": 0, "p95_latency": 0, "avg_uptime": 0, "breaches": 0} for region in request.regions}
-            return results
-        
         # Calculate metrics per region
         results = {}
         
@@ -120,16 +113,20 @@ async def analyze_latency(request: AnalyticsRequest):
                 "breaches": breaches
             }
         
-        # Return the results object directly (not wrapped in JSONResponse)
         return results
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-# Handle OPTIONS preflight requests
+# Handle OPTIONS preflight requests explicitly
 @app.options("/api/latency")
 async def options_latency():
-    return {"message": "OK"}
+    from fastapi.responses import JSONResponse
+    response = JSONResponse(content={"message": "OK"})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 @app.get("/")
 async def root():

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
 import statistics
@@ -9,16 +9,6 @@ class AnalyticsRequest(BaseModel):
     regions: List[str]
     threshold_ms: int
 
-# Manual CORS middleware
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS, PUT, DELETE"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-    return response
-
-# Load the telemetry data
 def load_telemetry_data():
     return [
         {"region": "apac", "service": "catalog", "latency_ms": 103.67, "uptime_pct": 99.269, "timestamp": 20250301},
@@ -75,58 +65,44 @@ def calculate_percentile(data: List[float], percentile: float) -> float:
 
 @app.post("/api/latency")
 async def analyze_latency(request: AnalyticsRequest):
-    try:
-        telemetry_data = load_telemetry_data()
+    telemetry_data = load_telemetry_data()
+    
+    # Filter data for requested regions
+    filtered_data = [item for item in telemetry_data if item["region"] in request.regions]
+    
+    # Calculate metrics per region
+    results = {}
+    
+    for region in request.regions:
+        region_data = [item for item in filtered_data if item["region"] == region]
         
-        # Filter data for requested regions
-        filtered_data = [item for item in telemetry_data if item["region"] in request.regions]
-        
-        # Calculate metrics per region
-        results = {}
-        
-        for region in request.regions:
-            region_data = [item for item in filtered_data if item["region"] == region]
-            
-            if not region_data:
-                results[region] = {
-                    "avg_latency": 0,
-                    "p95_latency": 0,
-                    "avg_uptime": 0,
-                    "breaches": 0
-                }
-                continue
-            
-            # Extract metrics
-            latencies = [item["latency_ms"] for item in region_data]
-            uptimes = [item["uptime_pct"] for item in region_data]
-            
-            # Calculate statistics
-            avg_latency = statistics.mean(latencies) if latencies else 0
-            p95_latency = calculate_percentile(latencies, 95)
-            avg_uptime = statistics.mean(uptimes) if uptimes else 0
-            breaches = sum(1 for latency in latencies if latency > request.threshold_ms)
-            
+        if not region_data:
             results[region] = {
-                "avg_latency": round(avg_latency, 2),
-                "p95_latency": round(p95_latency, 2),
-                "avg_uptime": round(avg_uptime, 4),
-                "breaches": breaches
+                "avg_latency": 0,
+                "p95_latency": 0,
+                "avg_uptime": 0,
+                "breaches": 0
             }
+            continue
         
-        return results
+        # Extract metrics
+        latencies = [item["latency_ms"] for item in region_data]
+        uptimes = [item["uptime_pct"] for item in region_data]
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-# Handle OPTIONS preflight requests explicitly
-@app.options("/api/latency")
-async def options_latency():
-    from fastapi.responses import JSONResponse
-    response = JSONResponse(content={"message": "OK"})
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return response
+        # Calculate statistics
+        avg_latency = statistics.mean(latencies) if latencies else 0
+        p95_latency = calculate_percentile(latencies, 95)
+        avg_uptime = statistics.mean(uptimes) if uptimes else 0
+        breaches = sum(1 for latency in latencies if latency > request.threshold_ms)
+        
+        results[region] = {
+            "avg_latency": round(avg_latency, 2),
+            "p95_latency": round(p95_latency, 2),
+            "avg_uptime": round(avg_uptime, 4),
+            "breaches": breaches
+        }
+    
+    return results
 
 @app.get("/")
 async def root():

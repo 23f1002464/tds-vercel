@@ -76,8 +76,8 @@ def calculate_percentile(data: List[float], percentile: float) -> float:
 
 @app.post("/api/latency")
 async def analyze_latency(request: AnalyticsRequest):
-    # Initialize results for all requested regions
-    results = {}
+    # Initialize regions object
+    regions = {}
     
     for region in request.regions:
         # Filter data for the current region
@@ -85,7 +85,7 @@ async def analyze_latency(request: AnalyticsRequest):
         
         if not region_data:
             # Return zeros if no data for region
-            results[region] = {
+            regions[region] = {
                 "avg_latency": 0.0,
                 "p95_latency": 0.0,
                 "avg_uptime": 0.0,
@@ -103,16 +103,16 @@ async def analyze_latency(request: AnalyticsRequest):
         avg_uptime = statistics.mean(uptimes)
         breaches = sum(1 for latency in latencies if latency > request.threshold_ms)
         
-        # Add to results
-        results[region] = {
+        # Add to regions object
+        regions[region] = {
             "avg_latency": round(avg_latency, 2),
             "p95_latency": round(p95_latency, 2),
             "avg_uptime": round(avg_uptime, 4),
             "breaches": breaches
         }
     
-    # Return the regions object directly
-    return results
+    # Return with "regions" as the top-level key
+    return {"regions": regions}
 
 @app.get("/")
 async def root():

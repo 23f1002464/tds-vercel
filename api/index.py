@@ -1,11 +1,9 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Dict
-import numpy as np
-from collections import defaultdict
+from fastapi.middleware.cors import CORSMiddleware
+import statistics
 
-# --- Application Setup ---
 app = FastAPI()
 
 # --- CORS Middleware ---
@@ -19,15 +17,10 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# --- Data Models ---
 class AnalyticsRequest(BaseModel):
     regions: List[str]
     threshold_ms: int
 
-# --- Data Loading and Processing ---
-
-# It's more efficient to load data once when the app starts, not on every request.
-# This data is now stored in a global variable.
 TELEMETRY_DATA = [
     {"region": "apac", "service": "catalog", "latency_ms": 103.67, "uptime_pct": 99.269, "timestamp": 20250301},
     {"region": "apac", "service": "support", "latency_ms": 206.81, "uptime_pct": 98.88, "timestamp": 20250302},
@@ -67,62 +60,60 @@ TELEMETRY_DATA = [
     {"region": "amer", "service": "payments", "latency_ms": 134.05, "uptime_pct": 98.826, "timestamp": 20250312}
 ]
 
-# Pre-process the data into a more efficient structure for lookups.
-# This groups all data points by region, avoiding re-filtering on every request.
-PROCESSED_DATA = defaultdict(lambda: {'latencies': [], 'uptimes': []})
-for item in TELEMETRY_DATA:
-    region = item['region']
-    PROCESSED_DATA[region]['latencies'].append(item['latency_ms'])
-    PROCESSED_DATA[region]['uptimes'].append(item['uptime_pct'])
-
-# --- API Endpoints ---
+def calculate_percentile(data: List[float], percentile: float) -> float:
+    if not data:
+        return 0.0
+    sorted_data = sorted(data)
+    index = (len(sorted_data) - 1) * percentile / 100
+    lower_index = int(index)
+    upper_index = lower_index + 1
+    
+    if upper_index >= len(sorted_data):
+        return sorted_data[lower_index]
+    
+    weight = index - lower_index
+    return sorted_data[lower_index] * (1 - weight) + sorted_data[upper_index] * weight
 
 @app.post("/api/latency")
 async def analyze_latency(request: AnalyticsRequest):
-    """
-    Analyzes telemetry data for a given list of regions and returns key statistics.
-    """
+    # Initialize results for all requested regions
     results = {}
     
     for region in request.regions:
-        # Check if we have data for the requested region
-        if region not in PROCESSED_DATA:
-            # You might want to skip, return an error, or return empty data.
-            # Here, we'll return a zeroed-out entry.
+        # Filter data for the current region
+        region_data = [item for item in TELEMETRY_DATA if item["region"] == region]
+        
+        if not region_data:
+            # Return zeros if no data for region
             results[region] = {
-                "avg_latency": 0,
-                "p95_latency": 0,
-                "avg_uptime": 0,
+                "avg_latency": 0.0,
+                "p95_latency": 0.0,
+                "avg_uptime": 0.0,
                 "breaches": 0
             }
             continue
-
-        # Use the pre-processed data for calculations
-        latencies = PROCESSED_DATA[region]['latencies']
-        uptimes = PROCESSED_DATA[region]['uptimes']
         
-        # Using numpy is highly optimized for these kinds of numerical operations.
-        # It's more reliable and faster than a custom percentile function.
-        avg_latency = np.mean(latencies)
-        p95_latency = np.percentile(latencies, 95)
-        avg_uptime = np.mean(uptimes)
+        # Extract metrics
+        latencies = [item["latency_ms"] for item in region_data]
+        uptimes = [item["uptime_pct"] for item in region_data]
         
-        # Efficiently count breaches using a numpy array comparison
-        breaches = np.sum(np.array(latencies) > request.threshold_ms)
+        # Calculate statistics
+        avg_latency = statistics.mean(latencies)
+        p95_latency = calculate_percentile(latencies, 95)
+        avg_uptime = statistics.mean(uptimes)
+        breaches = sum(1 for latency in latencies if latency > request.threshold_ms)
         
+        # Add to results
         results[region] = {
             "avg_latency": round(avg_latency, 2),
             "p95_latency": round(p95_latency, 2),
             "avg_uptime": round(avg_uptime, 4),
-            "breaches": int(breaches) # Convert from numpy int to standard python int
+            "breaches": breaches
         }
     
+    # Return the regions object directly
     return results
 
 @app.get("/")
 async def root():
-    """
-    Root endpoint providing basic API information.
-    """
     return {"message": "Latency Analytics API", "status": "running"}
-
